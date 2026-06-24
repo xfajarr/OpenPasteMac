@@ -41,9 +41,10 @@ struct ClipboardCardView: View {
         )
         .shadow(color: .black.opacity(isSelected ? 0.6 : 0.35), radius: isSelected ? 12 : 6, y: 4)
         .scaleEffect(isSelected ? 1.02 : (isHovered ? 1.01 : 1.0))
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-        .animation(.easeOut(duration: 0.1), value: isHovered)
+        .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isSelected)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .onHover { isHovered = $0 }
+        .onDrag { NSItemProvider(object: item.id.uuidString as NSString) }
         .onTapGesture { onPaste() }
         .contextMenu { contextMenu }
     }

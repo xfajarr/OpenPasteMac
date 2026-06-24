@@ -107,8 +107,13 @@ class ClipboardStore: ObservableObject {
     }
 
     func addItem(_ item: ClipboardItem, toPinboard boardID: UUID) {
-        guard let i = pinboards.firstIndex(where: { $0.id == boardID }) else { return }
-        let idStr = item.id.uuidString
+        addItemID(item.id.uuidString, toPinboard: boardID)
+    }
+
+    // Used by drag-and-drop, where only the dragged item's UUID string is available.
+    func addItemID(_ idStr: String, toPinboard boardID: UUID) {
+        guard let i = pinboards.firstIndex(where: { $0.id == boardID }),
+              items.contains(where: { $0.id.uuidString == idStr }) else { return }
         if !pinboards[i].itemIDs.contains(idStr) { pinboards[i].itemIDs.append(idStr) }
         saveToDisk()
     }

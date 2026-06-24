@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import ServiceManagement
 import SwiftUI
 
@@ -14,6 +15,14 @@ private func hotKeyHandler(
     return noErr
 }
 
+// Borderless/nonactivating panels can't become key by default, so the search
+// TextField never receives keystrokes. Allow it without activating the app.
+final class ShelfPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    // Suppress the macOS system beep for unhandled key events (arrows, etc.).
+    override func noResponder(for eventSelector: Selector) {}
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!
@@ -25,8 +34,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var clickOutsideMonitor: Any?
 
     private let shelfHeight: CGFloat = 295
+    private let searchBarExtra: CGFloat = 52   // panel grows by this when search is open
+    private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupMainMenu()
         setupStatusItem()
         setupPanel()
         registerHotKey()
@@ -34,7 +46,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         clipMonitor = ClipboardMonitor(store: store)
         clipMonitor.start()
 
+        // Grow/shrink the panel as the search bar shows/hides so cards aren't clipped
+        store.$isSearching
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] searching in self?.adjustPanelHeight(searching: searching) }
+            .store(in: &cancellables)
+
         requestAccessibilityIfNeeded()
+    }
+
+    private func adjustPanelHeight(searching: Bool) {
+        guard panel.isVisible else { return }
+        let f = panel.frame
+        let targetH = shelfHeight + (searching ? searchBarExtra : 0)
+        let newFrame = NSRect(x: f.minX, y: f.minY, width: f.width, height: targetH)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
+            panel.animator().setFrame(newFrame, display: true)
+        }
+    }
+
+    // MARK: - Main Menu (enables Cmd+A/C/V/X/Z in the search field)
+
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        editItem.submenu = edit
+        edit.addItem(withTitle: "Undo",  action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo",  action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut",   action: #selector(NSText.cut(_:)),       keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy",  action: #selector(NSText.copy(_:)),      keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)),     keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        NSApp.mainMenu = mainMenu
     }
 
     // MARK: - Status Item
@@ -85,7 +134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Bottom Shelf Panel
 
     private func setupPanel() {
-        panel = NSPanel(
+        panel = ShelfPanel(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: shelfHeight),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
             backing: .buffered,
@@ -149,16 +198,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let screen = targetScreen()
-        let sf = screen.frame
-        let targetFrame = NSRect(x: sf.minX, y: sf.minY, width: sf.width, height: shelfHeight)
-        let startFrame  = NSRect(x: sf.minX, y: sf.minY - shelfHeight, width: sf.width, height: shelfHeight)
+        let sf = screen.visibleFrame
+        let sideMargin: CGFloat = 16
+        let bottomGap: CGFloat = 12
+        let w = sf.width - sideMargin * 2
+        let targetFrame = NSRect(x: sf.minX + sideMargin, y: sf.minY + bottomGap, width: w, height: shelfHeight)
+        let startFrame  = NSRect(x: sf.minX + sideMargin, y: sf.minY - shelfHeight, width: w, height: shelfHeight)
 
         panel.setFrame(startFrame, display: false)
         panel.makeKeyAndOrderFront(nil)
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.26
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.duration = 0.34
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
             panel.animator().setFrame(targetFrame, display: true)
         }
 
@@ -175,8 +227,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let f = panel.frame
             let offscreen = NSRect(x: f.minX, y: f.minY - f.height, width: f.width, height: f.height)
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.20
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                ctx.duration = 0.24
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.5, 0, 0.75, 0)
                 panel.animator().setFrame(offscreen, display: true)
             }, completionHandler: {
                 self.panel.orderOut(nil)
@@ -221,8 +273,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard panel.isVisible else { return event }
 
         switch event.keyCode {
-        case 123: store.moveLeft();  return nil   // ←
-        case 124: store.moveRight(); return nil   // →
+        case 123, 126: store.moveLeft();  return nil   // ← / ↑
+        case 124, 125: store.moveRight(); return nil   // → / ↓
         case 36, 76:                              // Return / Numpad Enter
             if let item = store.selectedItem { pasteItem(item) }
             return nil
@@ -231,13 +283,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         default:
             if event.modifierFlags.contains(.command) {
+                if event.keyCode == 3 {               // ⌘F → open & focus search
+                    store.isSearching = true
+                    store.triggerFocus = true
+                    return nil
+                }
                 let map: [UInt16: Int] = [18:0, 19:1, 20:2, 21:3, 23:4, 22:5, 26:6, 28:7, 25:8]
                 if let idx = map[event.keyCode], idx < store.filteredItems.count {
                     pasteItem(store.filteredItems[idx])
                     return nil
                 }
             }
-            return event
+            // While searching, hand the key to the text field; otherwise swallow it
+            // so unhandled keys don't trigger the macOS system beep.
+            return store.isSearching ? event : nil
         }
     }
 

@@ -1,15 +1,17 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PinboardTabBar: View {
     @ObservedObject var store: ClipboardStore
     @Binding var isSearching: Bool
     @Binding var showAddPinboard: Bool
+    @State private var dropTargetID: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
             // Search toggle
             Button {
-                withAnimation(.easeInOut(duration: 0.18)) { isSearching.toggle() }
+                isSearching.toggle()
                 if !isSearching { store.searchQuery = "" }
             } label: {
                 Image(systemName: isSearching ? "xmark" : "magnifyingglass")
@@ -36,6 +38,13 @@ struct PinboardTabBar: View {
                             color: board.color,
                             isSelected: store.selectedPinboardID == board.id
                         ) { store.selectedPinboardID = board.id }
+                            .overlay(
+                                Capsule().stroke(Color.white, lineWidth: dropTargetID == board.id ? 2 : 0)
+                            )
+                            .onDrop(of: [.text], isTargeted: Binding(
+                                get: { dropTargetID == board.id },
+                                set: { dropTargetID = $0 ? board.id : nil }
+                            )) { providers in handleDrop(providers, board: board) }
                             .contextMenu {
                                 Button("Delete \"\(board.name)\"", role: .destructive) {
                                     store.removePinboard(id: board.id)
@@ -81,6 +90,15 @@ struct PinboardTabBar: View {
         }
         .frame(height: 44)
         .padding(.horizontal, 8)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider], board: Pinboard) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
+            guard let idStr = obj as? NSString else { return }
+            DispatchQueue.main.async { store.addItemID(idStr as String, toPinboard: board.id) }
+        }
+        return true
     }
 }
 

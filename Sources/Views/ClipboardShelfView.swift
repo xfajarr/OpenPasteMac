@@ -15,7 +15,7 @@ struct ClipboardShelfView: View {
 
     var body: some View {
         ZStack {
-            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow, cornerRadius: 18)
                 .ignoresSafeArea()
                 .colorScheme(.dark)
 
@@ -28,13 +28,20 @@ struct ClipboardShelfView: View {
                 .padding(.top, 4)
 
                 if store.isSearching {
-                    searchField
+                    HStack(spacing: 0) {
+                        searchField.frame(maxWidth: 360)
+                        Spacer(minLength: 0)
+                    }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .padding(.bottom, 10)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 Divider().background(Color.white.opacity(0.1))
                 cardScroll
             }
+            .animation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.3), value: store.isSearching)
 
             // Preview overlay rendered on top of everything
             if let item = previewingItem {
@@ -73,29 +80,60 @@ struct ClipboardShelfView: View {
 
     // MARK: - Search Bar
 
+    private var accent: Color { Color(red: 0.22, green: 0.55, blue: 1.0) }
+
     private var searchField: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.4))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(searchFocused ? accent : .white.opacity(0.45))
+                .scaleEffect(searchFocused ? 1.12 : 1.0)
+
             TextField("Search clipboard...", text: $store.searchQuery)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.system(size: 13.5))
                 .foregroundColor(.white)
                 .focused($searchFocused)
                 .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true } }
+
             if !store.searchQuery.isEmpty {
+                Text("\(store.filteredItems.count)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.6))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.white.opacity(0.1)))
+                    .transition(.scale.combined(with: .opacity))
+
                 Button { store.searchQuery = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.4))
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.5))
                 }
                 .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.white.opacity(0.06))
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.black.opacity(0.38))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(accent.opacity(searchFocused ? 0.12 : 0))
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(
+                    searchFocused ? accent : Color.white.opacity(0.18),
+                    lineWidth: searchFocused ? 1.5 : 1
+                )
+        )
+        .shadow(color: searchFocused ? accent.opacity(0.5) : .black.opacity(0.25), radius: searchFocused ? 9 : 4, y: 2)
+        .animation(.easeOut(duration: 0.18), value: searchFocused)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: store.searchQuery.isEmpty)
     }
 
     // MARK: - Card Scroll
@@ -129,12 +167,12 @@ struct ClipboardShelfView: View {
                                 .id(item.id)
                             }
                         }
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                     }
                     .onChange(of: store.selectedIndex) { idx in
                         if let item = store.filteredItems[safe: idx] {
-                            withAnimation(.easeOut(duration: 0.18)) {
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) {
                                 proxy.scrollTo(item.id, anchor: .center)
                             }
                         }
